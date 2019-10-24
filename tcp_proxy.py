@@ -3,10 +3,22 @@ import sys
 import socket
 import select
 import threading
+import binascii
 
+
+class MessageProcessor:
+    def handle_message(self, msg):
+        pass
+
+
+class HexDump(MessageProcessor):
+    def handle_message(self, msg):
+        print("[*] Message Hex:")
+        print(binascii.b2a_hex(msg))
 
 class ProxyServer:
-    def __init__(self, target_host, target_port, server_addr, server_port):
+    def __init__(self, target_host, target_port, server_addr, server_port, handlers = []):
+        self.__handlers = handlers
         self.__target_host = target_host
         self.__target_port = target_port
         self.__server_addr = server_addr
@@ -53,7 +65,7 @@ class ProxyServer:
     def __reader_loop(self):
         while not self.__close:
             flatlist = [item for tempList in self.__socket_pairs for item in tempList]
-            (rs, ws, xs) = select.select(flatlist, [], [], 0.1)
+            (rs, _, _) = select.select(flatlist, [], [], 0.1)
             for s in rs:
                 matching_sock = None
                 pair = None
@@ -65,18 +77,25 @@ class ProxyServer:
                         break
                     if y == s:
                         matching_sock = x
+                        pair = (x,y)
                         print("[==>] Received message")
                         break
-                        pair = (x,y)
-                buffer = s.recv(4096)
-                if len(buffer) == 0 or buffer == b'\xff\xf4\xff\xfd\x06':
+                raw_buffer = bytearray()
+                while True:
+                    (rss,_,_) = select.select([s], [], [], 0.001)
+                    if len(rss) == 0:
+                        break
+                    raw_buffer.extend(s.recv(4096))
+                if len(raw_buffer) == 0 or raw_buffer == b'\xff\xf4\xff\xfd\x06':
                     self.__socket_pairs.remove(pair)
                     s.shutdown(socket.SHUT_RDWR)
                     s.close()
                     matching_sock.shutdown(socket.SHUT_RDWR)
                     matching_sock.close()
                     continue
-                matching_sock.send(buffer)
+                for h in self.__handlers:
+                    h.handle_message(raw_buffer)
+                matching_sock.send(raw_buffer)
 
 
 def parse_args():
@@ -90,7 +109,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    server = ProxyServer(args.target, args.targetport, args.client, args.clientport)
+    server = ProxyServer(args.target, args.targetport, args.client, args.clientport, [HexDump()])
     server.run()
 
 
